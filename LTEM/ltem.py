@@ -21,7 +21,7 @@ PWR_SIM7070 = 4
 
 #################################################GLOBAL VARIABLES
 ATbuffer = []
-ssh = 0
+ssl = 0
 APIjwt = '' 
 rssi=""
 snr=""
@@ -50,22 +50,23 @@ def serialProcess():
             if((inputString.find("down") != -1)):
                 
                 #print("+SPUB : " + inputString)
-                #Isolate topic and devEUI
-                serverTopic = inputString.split(',', 1)[0]
-                #calculate the length of string to be removed according to mqtt server topic header
-                cutNumber = 10 + len(confHeader)
-                devEUI = serverTopic[cutNumber:-6]
-                gatewayTopic = "application/1/device/" + devEUI + "/command/down"
                 #Isolate payload
-                inputPayload = inputString.split(',', 1)[1]
+                inputJSON = inputString.split(',', 1)[1]
                 #Remove the " "
-                inputPayload = inputPayload[1:-3]
+                inputJSON = inputJSON[1:-3]
+                print('downlink JSON :', inputJSON)
+                #Parse the json
+                jsonDat = json.loads(inputJSON)
+                #Isolate devEUI
+                devEUI = jsonDat['devEUI']
+                
+                gatewayTopic = "application/1/device/" + devEUI + "/command/down"
                 #print("+SPUB Topic :" + gatewayTopic)
                 #print("+SPUB Payload :" + inputPayload)
                 #print("+SPUB devEUI :" + devEUI)
-                logging.info('Downlink - devEUI : %s - Topic : %s - Payload : %s', devEUI, gatewayTopic, inputPayload)
+                logging.info('Downlink - devEUI : %s - Topic : %s - Payload : %s', devEUI, gatewayTopic, inputJSON)
 
-                client.publish(gatewayTopic,inputPayload)
+                client.publish(gatewayTopic,inputJSON)
             
             #2. check for configuration message in uart : hotspot
             elif((inputString.find("configuration/hotspot") != -1)):
@@ -156,12 +157,12 @@ def timeFrame():
     global LTEMstate
     global MQTTstate
     global gatewayID
-    global confHeader
+    global confPubHeader
 
     while True:
 
-        #Check every 10 minutes
-        time.sleep(600)
+        #Check every 5 minutes
+        #time.sleep(300)
 
         mqtt = 0
         ltem = 0
@@ -207,38 +208,41 @@ def timeFrame():
 
             MQTTstate = ATbuffer[1]
             
-            ################################################################!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! PROBLEM WHEN GNSS ANTENA IS OFF
-
             #Get GNSS signal
-            #ser.write(bytes('AT+SGNSCMD=1,0\r', 'utf-8'))
-            #time.sleep(0.2)
+            sendAT('AT+SGNSCMD=1,0\r')
+            time.sleep(0.2)
         
-            #while(brkInd < 120):
-            #    dataRaw = ser.readline()
-            #    dataStr = str(dataRaw, 'utf-8', 'ignore')
-            #    if(dataStr.find("+SGNSCMD:") != -1):
-                    #print(dataStr)
-                    #Isolate the time
-            #        timeStr=dataStr.split(',', 11)[1]
-                    #print('Got time from GPS : ' + timeStr)
-                    #Isolate locate
-            #        lat=dataStr.split(',', 11)[2]
-            #        long=dataStr.split(',', 11)[3]
-            #        alt=dataStr.split(',', 11)[6]
-                    #print('Got location from GPS : ' + lat + "," + long + "," + alt)
-            #        logging.info('Gateway location : %s,%s,%s',lat,long,alt)
-            #        #Update raspberry Pi time
-            #        timeCmd = "sudo date -s \"" + timeStr + "\""
-            #        os.system(timeCmd)
-            #        break
-            #    elif(dataStr.find("+SGNSERR:") != -1) :
-                    #print('Unable to get GNSS signal')
-            #        logging.warning('Unable to get GNSS signal')
-            #        break
+            while brkInd < 1000000:
+            
+                try : 
+                    
+                    dataRaw = ser.readline()
+                    dataStr = str(dataRaw, 'utf-8', 'ignore')
+                    if(dataStr.find("+SGNSCMD:") != -1):
+                        
+                        #Isolate the time
+                        timeStr=dataStr.split(',', 11)[1]
+                        #print('Got time from GPS : ' + timeStr)
+                        #Isolate locate
+                        lat=dataStr.split(',', 11)[2]
+                        long=dataStr.split(',', 11)[3]
+                        alt=dataStr.split(',', 11)[6]
+                        #print('Got location from GPS : ' + lat + "," + long + "," + alt)
+                        logging.info('Gateway location : %s,%s,%s',lat,long,alt)
+                        #Update raspberry Pi time
+                        timeCmd = "sudo date -s \"" + timeStr + "\""
+                        os.system(timeCmd)
+                        break
 
-            #    brkInd = brkInd + 1
-            #    time.sleep(1)
+                    elif(dataStr.find("+SGNSERR:") != -1):
+                        #print('Unable to get GNSS signal')
+                        logging.warning('Unable to get GNSS signal')
+                        break 
+                except :
+                    dataStr =  ''
 
+                brkInd = brkInd + 1
+            
             #Determine network state
             if(LTEMstate.find("Online") != -1):
                 #print("Gateway is connected in LTEM")
@@ -270,9 +274,8 @@ def timeFrame():
 
                 #Prepare time frame
                 timeFrame = "{\"gatewayID\":\"" + gatewayID + "\", \"ltemRSSI\":" + rssi + ", \"ltemRSSNR\":"  + snr +  ", \"time\":\"" + timeStamp + "\", \"latitude\":" + lat + ", \"longitude\":" + long + ", \"altitude\":" + alt + "}"
-                ########################################################!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!MODIFICATION IOTHINK
-                #topic = confHeader + "/" + gatewayID + "/time"
-                topic = confHeader + "/up"
+                
+                topic = confPubHeader + "/up"
                 ATstr = 'AT+SMPUB=\"'+ topic +'\",'+ str(len(timeFrame)) +',1,1\r'
                 ser.write(bytes(ATstr,'utf-8'))
                 time.sleep(0.2)
@@ -287,27 +290,6 @@ def timeFrame():
                 file.write("MQTT=0\n")
                 resetMQTT()
                         
-            #get time and date to timestamp the message
-            #timeStamp = datetime.now()
-            #timeStamp = timeStamp.strftime("%d/%m/%Y %H:%M:%S")
-            #logging.info('Gateway time : %s', timeStamp)
-
-            #Prepare time frame
-            
-            #timeFrame = "{\"gatewayID\":\"" + gatewayID + "\", \"ltemRSSI\":" + rssi + ", \"ltemRSSNR\":"  + snr +  ", \"time\":\"" + timeStamp + "\", \"latitude\":" + lat + ", \"longitude\":" + long + ", \"altitude\":" + alt + "}"
-            ########################################################!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!MODIFICATION IOTHINK
-            #topic = confHeader + "/" + gatewayID + "/time"
-            #topic = confHeader + "/up"
-            #ATstr = 'AT+SMPUB=\"'+ topic +'\",'+ str(len(timeFrame)) +',1,1\r'
-            #ser.write(bytes(ATstr,'utf-8'))
-            #time.sleep(0.2)
-
-            #Send content over UART
-            #ser.write(bytes(timeFrame,'utf-8'))
-            #time.sleep(2)
-
-            #logging.info('Uplink message sent to MQTT topic %s : %s',topic, timeFrame)
-
         except :
             
             #print('Problem checking LTE-M network and MQTT connection')
@@ -316,6 +298,9 @@ def timeFrame():
         serialMutex.release()
         
         file.close()
+
+        #Check every 5 minutes
+        time.sleep(300)
 
 ######################################################################################################
 #Function logClean: Keep last 1000 lines in log file-------------------------------------------------#
@@ -358,7 +343,7 @@ def on_message(client, userdata, message):
   
     gatewayTopic=message.topic
     #print("+GPUB " + str(len(json)) + "bytes - Topic " + gatewayTopic  + " :" + json)
-    #logging.info('Gateway publish - Size : %s bytes - Topic : %s - JSON : %s', str(len(jsonStr)), gatewayTopic, jsonStr)
+    
     #Check if uplink message
     if((gatewayTopic.find("event/up") != -1)):
         
@@ -366,7 +351,7 @@ def on_message(client, userdata, message):
         devEUI = gatewayTopic.split('/', 6)[3]
 
         #format server topic
-        serverTopic = confHeader + "/" + gatewayID + "/" + devEUI + "/up"
+        #serverTopic = confPubHeader + "/up"
 
         #Parse the json
         jsonDat = json.loads(jsonStr)
@@ -395,7 +380,7 @@ def on_message(client, userdata, message):
 def publish():
 
     global gatewayID
-    global confHeader
+    global confPubHeader
     global ATbuffer
 
     while True:
@@ -416,10 +401,10 @@ def publish():
                 jsonLine = json.loads(line)
                 #Isolate devEUI
                 devEUI = jsonLine['devEUI']
+
                 #format server topic
-                ######################################################################!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!MODIFICATION IOTHINK
-                #serverTopic = confHeader + "/" + gatewayID + "/" + devEUI + "/up"
-                serverTopic = confHeader + "/up"
+                serverTopic = confPubHeader + "/up"
+                
                 #Make the publish command
                 serialMutex.acquire()
                 ser.write(bytes('AT+SMSTATE?\r', 'utf-8'))
@@ -461,7 +446,7 @@ def sendAT(ATcommand):
     while(buffer > 0):
         inData = ser.readline()
         ATbuffer.append(str(inData, 'utf-8', 'ignore'))
-        #print ("UART " + str(ind) + " -> " +  ATbuffer[ind])
+        print ("UART " + str(ind) + " -> " +  ATbuffer[ind])
         ind = ind + 1
         time.sleep(0.2)
         buffer = ser.inWaiting()   
@@ -486,7 +471,7 @@ def flushAT():
 
 def simcomInit():
 
-    global ssh
+    global ssl
     global gatewayID
     global ATbuffer
     global rssi
@@ -500,7 +485,8 @@ def simcomInit():
     logging.info('network APN : %s',confAPN)
     logging.info('MQTT broker URL : %s',confURL)
     logging.info('MQTT broker port : %s',confPort)
-    logging.info('MQTT broker topic header : %s',confHeader)
+    logging.info('MQTT broker topic publish header : %s',confPubHeader)
+    logging.info('MQTT broker topic subscribe header : %s',confSubHeader)
     logging.info('MQTT broker username : %s',confUsername)
     logging.info('MQTT broker client ID : %s',confClid)
 
@@ -530,9 +516,9 @@ def simcomInit():
     time.sleep(0.1)
 
     #Check if connection to MQTT broker must be secured
-    if(ssh==1):
+    if(ssl != 0):
                 
-        #Remove the previous certificates
+        #Remove the previous certificates from SIM7070 ROM
         sendAT('AT+CFSINIT\r')
         time.sleep(0.1)
 
@@ -545,28 +531,61 @@ def simcomInit():
         sendAT('AT+CFSDFILE=3,\"server.cer\"\r')
         time.sleep(2)
 
-	#Open certificate files
-        logging.info('Loading SSH certificates')
+        #Check SSL type : CA only (ssl=2) or module certificate too (ssl=1)
+        
+        if os.path.isfile('/home/ogate/LTEM/certificates/server.cer'):
+            ssl = 1
+            #print ("Server CA root certificate found")
+        else:
+            #print ("Problem : CA root certificate not found - MQTTS connection not possible")
+            ssl = 0
 
-        moduleCert = open("/home/ogate/LTEM/certificates/module.cer", "r")
-        moduleCertLines = moduleCert.readlines()
-        moduleKey = open("/home/ogate/LTEM/certificates/module.key", "r")
-        moduleKeyLines = moduleKey.readlines()
+        if os.path.isfile('/home/ogate/LTEM/certificates/module.cer'):
+            #print ("Client certificate found")
+            ssl = 1
+        else:
+            #print ("Client certificate not found")
+            ssl = 2
+
+        if os.path.isfile('/home/ogate/LTEM/certificates/module.key'):
+            #print ("Client key found")
+            ssl = 1
+        else:
+            #print ("Client key not found")
+            ssl = 2
+
+	#Open certificate files saved on RPi
+        logging.info('Loading SSL certificates')
+
         serverCert = open("/home/ogate/LTEM/certificates/server.cer", "r")
         serverCertLines = serverCert.readlines()
+        serverCert.close()
 
+
+        if ssl == 1:
+
+            moduleKey = open("/home/ogate/LTEM/certificates/module.key", "r")
+            moduleKeyLines = moduleKey.readlines()
+            moduleCert = open("/home/ogate/LTEM/certificates/module.cer", "r")
+            moduleCertLines = moduleCert.readlines()
+            moduleCert.close()
+            moduleKey.close()
+            
 	#Get size of the certificates
-        moduleCertLen = os.path.getsize("/home/ogate/LTEM/certificates/module.cer")
-        #print("Module certificate found : " + str(moduleCertLen)  + " bytes")
-        logging.info('Module certificate found : %s bytes', str(moduleCertLen))
-        
-        moduleKeyLen = os.path.getsize("/home/ogate/LTEM/certificates/module.key")
-        #print("Module key found : " + str(moduleKeyLen)  + " bytes")
-        logging.info('Module key found : %s bytes', str(moduleKeyLen))
-        
+
         serverCertLen = os.path.getsize("/home/ogate/LTEM/certificates/server.cer")
         #print("Server certificate found : " + str(serverCertLen)  + " bytes")
         logging.info('Server certificate found : %s bytes', str(serverCertLen))
+
+        if ssl == 1:
+
+            moduleCertLen = os.path.getsize("/home/ogate/LTEM/certificates/module.cer")
+            #print("Module certificate found : " + str(moduleCertLen)  + " bytes")
+            logging.info('Module certificate found : %s bytes', str(moduleCertLen))
+        
+            moduleKeyLen = os.path.getsize("/home/ogate/LTEM/certificates/module.key")
+            #print("Module key found : " + str(moduleKeyLen)  + " bytes")
+            logging.info('Module key found : %s bytes', str(moduleKeyLen))
         
         #Upload certificates over uart
         ################################################################################SERVER.CER
@@ -590,64 +609,66 @@ def simcomInit():
 
         time.sleep(2)
 
-        ##############################################################################MODULE.CER
-        ATstring = 'AT+CFSWFILE=3,\"module.cer\",0,' + str(moduleCertLen) + ',10000\r'
-        sendAT(ATstring)
-        time.sleep(0.4)
-        #send over uart
-        for line in moduleCertLines :
-            ser.write(bytes(line.strip(), 'utf-8'))
-            ser.write(bytes('\n','utf-8'))
-            #print(line.strip())
+        if ssl == 1:
+
+            ##############################################################################MODULE.CER
+            ATstring = 'AT+CFSWFILE=3,\"module.cer\",0,' + str(moduleCertLen) + ',10000\r'
+            sendAT(ATstring)
+            time.sleep(0.4)
+            #send over uart
+            for line in moduleCertLines :
+                ser.write(bytes(line.strip(), 'utf-8'))
+                ser.write(bytes('\n','utf-8'))
+                #print(line.strip())
         
-        endAT = ''
-        while(endAT.find("OK") == -1):
-            sendAT(' \r')      
-            time.sleep(0.1)
-            try :
-                endAT = ATbuffer[1]
-            except : 
-                endAT = ''
+            endAT = ''
+            while(endAT.find("OK") == -1):
+                sendAT(' \r')      
+                time.sleep(0.1)
+                try :
+                    endAT = ATbuffer[1]
+                except : 
+                    endAT = ''
 
-        time.sleep(2)
+            time.sleep(2)
 
-        ##############################################################################MODULE.KEY
-        ATstring = 'AT+CFSWFILE=3,\"module.key\",0,' + str(moduleKeyLen) + ',10000\r'
-        sendAT(ATstring)
-        time.sleep(0.4)
-        #send over uart
-        for line in moduleKeyLines :
-            ser.write(bytes(line.strip(), 'utf-8'))
-            ser.write(bytes('\n','utf-8'))
-            #print(line.strip())
+            ##############################################################################MODULE.KEY
+            ATstring = 'AT+CFSWFILE=3,\"module.key\",0,' + str(moduleKeyLen) + ',10000\r'
+            sendAT(ATstring)
+            time.sleep(0.4)
+            #send over uart
+            for line in moduleKeyLines :
+                ser.write(bytes(line.strip(), 'utf-8'))
+                ser.write(bytes('\n','utf-8'))
+                #print(line.strip())
         
-        endAT = ''
-        while(endAT.find("OK") == -1):
-            sendAT(' \r')      
-            time.sleep(0.1)
-            try :
-                endAT = ATbuffer[1]
-            except : 
-                endAT = ''
+            endAT = ''
+            while(endAT.find("OK") == -1):
+                sendAT(' \r')      
+                time.sleep(0.1)
+                try :
+                    endAT = ATbuffer[1]
+                except : 
+                    endAT = ''
 
-        time.sleep(2)
+            time.sleep(2)
 
         sendAT('AT+CFSTERM\r')
         time.sleep(0.5)
 
         sendAT('AT+CSSLCFG=\"convert\", 2, \"server.cer\"\r')
         time.sleep(0.5)
-        sendAT('AT+CSSLCFG=\"convert\",1,\"module.cer\",\"module.key\"\r')
-        time.sleep(0.5)
-        moduleCert.close()
-        moduleKey.close()
-        serverCert.close()
+
+        if ssl == 1:
+
+            sendAT('AT+CSSLCFG=\"convert\",1,\"module.cer\",\"module.key\"\r')
+            time.sleep(0.5)
 
         #Check certificates
         certState = ATbuffer[1]
         if(certState.find("OK") != -1):
             #print("Certificates uploaded sucessfully")
-            logging.info('SSH certificates uploaded sucessfully')
+            logging.info('SSL certificates uploaded sucessfully')
 
         else:
             #print("Problem uploading certificates")
@@ -718,9 +739,14 @@ def simcomInit():
 
     file.close()
 
-    if(ssh==1):
+    if(ssl == 1):
         sendAT('AT+SMSSL=1,\"server.cer\",\"module.cer\"\r')
         time.sleep(0.5)
+
+    elif(ssl == 2):
+        #!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!IMPOSSIBLE TO USE MQTTS WITHOUT CLIENT FILES FOR NOW
+        sendAT('AT+SMSSL=1,"server.cer"')
+        time.sleep(2)
 
     ATstring = 'AT+SMCONF=\"URL\",\"' + confURL + '\",' + confPort + '\r'
     sendAT(ATstring)
@@ -760,15 +786,14 @@ def simcomInit():
             break
 
         #print("Unable to connect to server MQTT broker - Retrying")
-        #logging.error('Unable to connect to server MQTT broker - Retrying')
+        logging.error('Unable to connect to server MQTT broker - Retrying')
 
     logging.info('Connected to server MQTT broker')
 
     #Subscribe to gateway topic when connection is set
-    #logging.info('Connected to server MQTT broker')
-    #ATstring = 'AT+SMSUB=\"' + confHeader + '/'  + gatewayID +'/#\",1\r'
-    #sendAT(ATstring)
-    #time.sleep(0.5)
+    ATstring = 'AT+SMSUB=\"' + confSubHeader +'/#\",1\r'
+    sendAT(ATstring)
+    time.sleep(0.5)
 
 
 ######################################################################################################
@@ -777,7 +802,7 @@ def simcomInit():
 
 def resetMQTT():
     
-    global ssh
+    global ssl
 
     #print("----Resetting MQTT connection----")
     logging.info('Resetting MQTT connection')
@@ -794,7 +819,7 @@ def resetMQTT():
     sendAT('AT+CNACT=0,1\r')
     time.sleep(2)
 
-    #if(ssh == 1):
+    #if(ssl == 1):
 
     #    sendAT("AT+SMSSL=1,\"server.cer\",\"module.cer\"\r")
     #    time.sleep(0.5)
@@ -842,11 +867,9 @@ def resetMQTT():
     logging.info('Connected to server MQTT broker')
 
     #Subscribe to gateway topic when connection is set
-    ##############################################!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!MODIFICATION IOTHINK
-
-    #ATstring = 'AT+SMSUB=\"' + confHeader + '/'  + gatewayID +'/#\",1\r'
-    #sendAT(ATstring)
-    #time.sleep(0.5)
+    ATstring = 'AT+SMSUB=\"' + confSubHeader +'/#\",1\r'
+    sendAT(ATstring)
+    time.sleep(0.5)
 
     
 ######################################################################################################
@@ -944,27 +967,30 @@ file = open("/home/ogate/LTEM/ltem.conf", "r")
 confList = [line for line in file.readlines()]
 file.close()
 confAPN = confList[0].split('=',1)[1][:-1]
-logging.info('network APN : %s',confAPN)
+print('network APN : ',confAPN)
 confURL = confList[1].split('=',1)[1][:-1]
-logging.info('MQTT broker URL : %s',confURL)
+print('MQTT broker URL : ',confURL)
 confPort = confList[2].split('=',1)[1][:-1]
-logging.info('MQTT broker port : %s',confPort)
-confHeader = confList[3].split('=',1)[1][:-1]
-logging.info('MQTT broker topic header : %s',confHeader)
-confUsername = confList[4].split('=',1)[1][:-1]
-logging.info('MQTT broker username : %s',confUsername)
-confPassword = confList[5].split('=',1)[1][:-1]
-confClid = confList[6].split('=',1)[1][:-1]
-logging.info('MQTT broker client ID : %s',confClid)
-confSSH = confList[7].split('=',1)[1][:-1]
+print('MQTT broker port : ',confPort)
+confPubHeader = confList[3].split('=',1)[1][:-1]
+print('MQTT broker publish topic header : ',confPubHeader)
+confSubHeader = confList[4].split('=',1)[1][:-1]
+print('MQTT broker subscribe topic header : ',confSubHeader)
+confUsername = confList[5].split('=',1)[1][:-1]
+print('MQTT broker username : ',confUsername)
+confPassword = confList[6].split('=',1)[1][:-1]
+#print('MQTT broker password : ',confPassword)
+confClid = confList[7].split('=',1)[1][:-1]
+print('MQTT broker client ID : ',confClid)
+confSSL = confList[8].split('=',1)[1][:-1]
 
-if(confSSH == "1"):
-    ssh = 1
-    #print("----Secured MQTT (SSH) is activated----")
-    logging.info('Secured MQTT activated')
+if(confSSL == "1"):
+    ssl = 1
+    #print("----Secured MQTT (SSL) is activated----")
+    logging.info('Secured MQTT (SSL) activated')
 
 else:
-    logging.info('Secured MQTT not activated')
+    logging.info('Secured MQTT (SSL) not activated')
 
 #Get gateway Id
 #!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!RPI0
