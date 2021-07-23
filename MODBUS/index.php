@@ -3,7 +3,7 @@
 	<head>
  		<title>1gate configurator</title>
 		<meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1"/>
-		<link href="style.css?v5" rel="stylesheet" type="text/css"/>
+		<link href="style.css?v1" rel="stylesheet" type="text/css"/>
 	</head>
 
 	<body>
@@ -17,8 +17,15 @@
 		<div class ="version">
 			<br />
 			<?php
-			$version = shell_exec('chirpstack-gateway-bridge version');
-			echo "Chirpstack version $version";
+				//Modbus srevice version
+                        	$modbusVersion = file_get_contents('/var/www/html/modbus.version');
+                        	echo "Modbus service version $modbusVersion";
+                        	echo("<br /><br />");
+
+                        	//Chirpstack Version
+                        	$chirpstackVersion = shell_exec('chirpstack-gateway-bridge version');
+                        	echo "Chirpstack version $chirpstackVersion";
+
 			?>
 		</div>
 
@@ -434,8 +441,9 @@
 	</div><!-- End of body-->
 
         <div class="footer">
-            <p>Need help? Visit <a href="https://www.atim.com/en/technical-support/"> www.atim.com/en/technical-support</a></p>
-        </div>
+        	<p>Need help? Visit <a href="https://www.atim.com/en/technical-support/"> www.atim.com/en/technical-support</a></p>
+        	<p><a href=update.php> Update Gateway </a></p>
+	</div>
 
     </body>
 </html>
